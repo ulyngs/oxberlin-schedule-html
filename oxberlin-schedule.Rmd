@@ -1,0 +1,115 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(huxtable)
+library(googlesheets4)
+
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+# read and store the schedule locally
+sheets_deauth() # the sheets are public so we don't need to authorise
+
+read_sheet("https://docs.google.com/spreadsheets/d/15qGPZ90GR6mU5kr2LZ6md29n2UQikX8O-jze9j4fSSs/edit?usp=sharing", sheet = "visual_programme") %>% 
+  write_csv("schedule.csv")
+
+read_sheet("https://docs.google.com/spreadsheets/d/15qGPZ90GR6mU5kr2LZ6md29n2UQikX8O-jze9j4fSSs/edit?usp=sharing", sheet = "html_programme") %>% 
+  write_csv("course_info.csv")
+
+
+# read in and wrangle
+schedule <- read_csv("schedule.csv", skip = 2, col_types = cols(.default = "c")) %>% 
+  rename(slot = X1) %>% 
+  filter(!(if_all(everything(), ~is.na(.)))) %>%    # drop columns that are all NAs
+  mutate(across(c(slot, "UK time"), ~str_replace(., "\n", "-"))) %>%  # use dashes instead of line breaks for the slot and UK time
+  mutate(across(-c(slot, "UK time"), ~str_remove_all(., "\n.*"))) %>%  # drop text after line break in the course title
+  mutate(across(-c(slot, "UK time"), ~if_else(. == "blank", str_c(., row_number()), .)))  # make the 'blank' placeholders in each row distinct
+
+course_info <- read_csv("course_info.csv") %>% 
+  select(-ID, -Day, -"UK time", -ContentCategory, -Notes) %>% 
+  mutate(Topic = str_trim(Topic)) %>% 
+  rename(value = Topic)
+
+
+```
+
+
+```{css}
+/* hide the 'slot' thing, also hide blank slot placeholders */
+th:nth-child(1),
+.blank-slot {
+  visibility: hidden;
+}
+
+th {
+  color: gray;
+  font-weight: bold !important;
+  font-size: 1.1em;
+}
+
+.slot-type, .time-slot {
+  color: gray;
+}
+
+.slot-type {
+  font-weight: bold;
+}
+
+.course-title {
+  font-weight: bold;
+}
+
+
+
+```
+
+```{r}
+# let's repeat the information where we want it merged
+schedule_long <- schedule %>% 
+  fill(slot) %>% 
+  pivot_longer(cols = c(-slot, -"UK time")) %>% 
+  mutate(value = str_trim(value)) %>% 
+  left_join(course_info) %>% 
+  mutate(value = if_else(!is.na(SpecificTime), str_c(value, SpecificTime, sep = " "), value))
+
+schedule_formatted <- schedule_long %>% 
+  mutate(value = if_else(!is.na(value) & !str_starts(value, "blank"), str_c('<span class="course-title ', BgCol, '">', value, '</span><br><span class="course-instructors">', Author, '</span>'), value)) %>% 
+  select(slot:value) %>% 
+  fill(value) %>% 
+  pivot_wider(names_from = name, values_from = value) %>% 
+  mutate(slot = str_c('<span class="slot-type">', slot, '</span>'),
+         `UK time` = str_c('<span class="time-slot">', `UK time`, '</span>')) %>% 
+  mutate(across(everything(), ~if_else(str_starts(., "blank"), 
+                                       str_c('<span class="blank-slot">', ., '</span>'), 
+                                       .))) %>% 
+  fill("UK time")
+
+# create huxtable where we merge the repeated rows
+oxberlin_hux <- schedule_formatted %>% 
+  as_hux() %>% 
+  # merge the slots
+  merge_repeated_rows() %>% 
+  # merge the cells with titles (first flip the table around, then back again)
+  t() %>% 
+  merge_repeated_rows() %>% 
+  t() %>% 
+  # manually merge days
+  merge_cells(1, 3:6) %>%  
+  merge_cells(1, 7:8) %>% 
+  merge_cells(1, 9:11) %>% 
+  merge_cells(1, 12:13)
+
+```
+
+# Oxford-Berlin Summerschool 2021 schedule
+```{r}
+oxberlin_hux %>% 
+  set_header_rows(1, TRUE) %>% 
+  map_background_color(by_regex("yellow-background" = "#ffe599")) %>% 
+  map_background_color(by_regex("orange-background" = "#f9cb9c")) %>% 
+  set_escape_contents(FALSE)
+```
+
